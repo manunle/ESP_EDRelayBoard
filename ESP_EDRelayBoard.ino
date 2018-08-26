@@ -15,8 +15,6 @@ byte relay2state = 0;
 String sChipID;
 long lastReconnectAttempt = 0;
 int rbver = 0;
-String verstr = "ESP_EDRelayBoard ver 1.0";
-
 
 ESPBASE Esp;
 
@@ -29,7 +27,6 @@ void setup() {
   Esp.initialize();
 
   customWatchdog = millis();
-  setupMQTTClient();
   customWatchdog = millis();
 
   pinMode(RELAY1_PIN,OUTPUT);
@@ -40,46 +37,7 @@ void setup() {
 }
 
 void loop() {
-  // OTA request handling
-  ArduinoOTA.handle();
-
-  //  WebServer requests handling
-  server.handleClient();
-
-   //  feed de DOG :)
-  customWatchdog = millis();
-  if(Esp.WIFI_connected)
-  {
-    if(config.MQTTServer != "")
-    {
-      if (!mqttClient.connected()) 
-      {
-        Serial.println("mqtt NOT connected");
-        long now = millis();
-        if (now - lastReconnectAttempt > 5000) 
-        {
-          lastReconnectAttempt = now;
-          // Attempt to reconnect
-          if (mqttClient.connect(config.MQTTServer.c_str())) 
-          {
-            String recon = "Recon";
-            mqttSend(recon,config.DeviceName,": Reconnected");
-            lastReconnectAttempt = 0;
-          }
-        }
-      } else {
-        // Client connected
-        mqttClient.loop();
-      }
-    
-      if(cHeartbeat >= config.HeartbeatEvery and config.HeartbeatEvery > 0)
-      {
-        cHeartbeat = 0;
-        mqttSend(config.HeartbeatTopic,config.DeviceName," Still Here");
-      }
-    }
-  }
-  yield();
+  Esp.loop();
 }
 
 String getSignalString()
@@ -95,60 +53,6 @@ String getSignalString()
     signalstring = signalstring + WiFi.SSID(network) + "=" + String(WiFi.RSSI(network));
   }
   return signalstring;    
-}
-
-void setupMQTTClient() {
-  int connectResult;
-  
-  if (config.MQTTServer != "") {
-    mqttClient.setServer(config.MQTTServer.c_str(), config.MQTTPort);
-//    mqttClient.setServer("192.168.1.6", config.MQTTPort);
-    mqttClient.setCallback(mqttCallback);
-    Serial.println("MQTT Connecting");
-      connectResult = mqttClient.connect(config.DeviceName.c_str());
-//        connectResult = mqttClient.connect("ME");
-    if (connectResult) {
-      Serial.println("MQTT Connected");
-    }
-    else{
-      Serial.println("Didn't connect");
-    }
-    
-    if (mqttClient.connected()) {
-      if (mqttClient.subscribe(config.StatusTopic.c_str())) {
-        Serial.println("Subscribed to " + config.StatusTopic);
-        mqttSend(config.RelayTopic,config.DeviceName+" ",Esp.MyIP());
-      }
-      if (mqttClient.subscribe(config.RelayTopic.c_str())) {
-        Serial.println("Subscribed to " + config.RelayTopic);
-        mqttSend(config.RelayTopic,config.DeviceName+" ","Subscribed to " + config.RelayTopic);
-        String startstr = "start";
-        mqttSend(startstr,config.DeviceName+" ",verstr);
-      }
-    }
-  }
-}
-
-void mqttSend(String& topic,String msg)
-{
-  String preface = ""; 
-  Serial.println(topic);
-  Serial.println(msg);
-  mqttSend(topic,preface,msg);
-}
-
-void mqttSend(String& topic,String& preface,String msg)
-{
-  Serial.println(topic);
-  Serial.println(preface);
-  Serial.println(msg);
-  String soutput=preface+msg;
-  char mybytes[soutput.length()+1];
-  char topicbytes[topic.length()+1];
-  topic.toCharArray(topicbytes,topic.length()+1);  
-  soutput.toCharArray(mybytes,soutput.length()+1);
-//  mqttClient.publish(topicbytes,mybytes);
-  mqttClient.publish(topic.c_str(),soutput.c_str());
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
@@ -175,14 +79,14 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     {
       Serial.println("This is for me");
 //      mqttSend(config.StatusTopic,formatConfig());
-        mqttSend(config.RelayTopic,config.DeviceName+" ",formatConfig());
+        Esp.mqttSend(config.RelayTopic,config.DeviceName+" ",formatConfig());
     }
   }
   if (s_topic == config.RelayTopic) 
   {
     if(s_payload == "STAT")
     {
-      mqttSend(config.RelayTopic,sChipID," WiFi: " + getSignalString());
+      Esp.mqttSend(config.RelayTopic,sChipID," WiFi: " + getSignalString());
     }
     if(s_payload == config.Relay1ToggleMessage)
     {
@@ -236,11 +140,27 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       RelayState = RelayState + "On ";
     else
       RelayState = RelayState + "Off ";
-    mqttSend(config.StatusTopic,config.DeviceName,RelayState);
+    Esp.mqttSend(config.StatusTopic,config.DeviceName,RelayState);
   }
 //  else {
 //    if (mqttDebug) { Serial.println(" [unknown message]"); }
 //  }
+}
+
+void mqttSubscribe()
+{
+    if (Esp.mqttClient->connected()) {
+      if (Esp.mqttClient->subscribe(config.StatusTopic.c_str())) {
+        Serial.println("Subscribed to " + config.StatusTopic);
+        Esp.mqttSend(config.RelayTopic,config.DeviceName+" ",Esp.MyIP());
+      }
+      if (Esp.mqttClient->subscribe(config.RelayTopic.c_str())) {
+        Serial.println("Subscribed to " + config.RelayTopic);
+        Esp.mqttSend(config.RelayTopic,config.DeviceName+" ","Subscribed to " + config.RelayTopic);
+        String startstr = "start";
+        Esp.mqttSend(startstr,config.DeviceName+" ",verstr);
+      }
+    }
 }
 
 

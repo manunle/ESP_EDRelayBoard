@@ -48,6 +48,7 @@
   #include <ArduinoOTA.h>
   #include <Ticker.h>
   #include <EEPROM.h>
+  #include <PubSubClient.h>
   extern "C" {
   #include "user_interface.h"
   }
@@ -60,8 +61,14 @@ public:
     bool WIFI_connected, CFG_saved;
     void initialize();
     void httpSetup();
+    WiFiClient espClient;
+    PubSubClient* mqttClient;
+    void setupMQTTClient();
+    void mqttSend(String topic,String preface,String msg);
+    void loop();
     void OTASetup();
     String MyIP();
+    long lastReconnectAttempt = 0;
 };
 
 #include "parameters.h"
@@ -80,13 +87,16 @@ public:
 #include "PAGE_NetworkConfiguration.h"
 
 //char tmpESP[100];
+void mqttCallback(char* topic, byte* payload, unsigned int length);
+void mqttSubscribe();
+String verstr = "ESP_EDRelayBoard ver 1.1";
 
 void ESPBASE::initialize(){
 
   CFG_saved = false;
   WIFI_connected = false;
   uint8_t timeoutClick = 50;
-
+  mqttClient = new PubSubClient(espClient);
   String chipID;
 
   // define parameters storage
@@ -133,6 +143,7 @@ void ESPBASE::initialize(){
         Serial.println("****** Connected! ******");
       }
       Serial.print("Wifi ip:");Serial.println(WiFi.localIP());
+      setupMQTTClient();
   }
 
   if ( !WIFI_connected or !CFG_saved){ // if no values saved or not good use defaults
@@ -251,10 +262,83 @@ void ESPBASE::OTASetup(){
 
 }
 
+void ESPBASE::setupMQTTClient() {
+  int connectResult;
+  
+  if (config.MQTTServer != "") {
+    mqttClient->setServer(config.MQTTServer.c_str(), config.MQTTPort);
+    mqttClient->setCallback(mqttCallback);
+    Serial.println("MQTT Connecting");
+      connectResult = mqttClient->connect(config.DeviceName.c_str(),"RIP",0,false,config.DeviceName.c_str());
+    if (connectResult) {
+      Serial.println("MQTT Connected");
+    }
+    else{
+      Serial.println("Didn't connect");
+    }
+    mqttSubscribe();
+  }
+}
+
+void ESPBASE::mqttSend(String topic,String preface,String msg)
+{
+  Serial.println(topic);
+  Serial.println(preface);
+  Serial.println(msg);
+  String soutput=preface+msg;
+  char mybytes[soutput.length()+1];
+  char topicbytes[topic.length()+1];
+  topic.toCharArray(topicbytes,topic.length()+1);  
+  soutput.toCharArray(mybytes,soutput.length()+1);
+//  mqttClient.publish(topicbytes,mybytes);
+  mqttClient->publish(topic.c_str(),soutput.c_str());
+}
 String ESPBASE::MyIP(){
   IPAddress ip = WiFi.localIP();
   String ipString = String(ip[0]) + '.' + String(ip[1]) + '.' + String(ip[2]) + '.' + String(ip[3]);
   return ipString;
 }
 
+void ESPBASE::loop()
+{
+  ArduinoOTA.handle();
+  server.handleClient();
+
+  customWatchdog = millis();
+
+  if(WIFI_connected)
+  {
+    if(config.MQTTServer != "")
+    {
+      if (!mqttClient->connected()) 
+      {
+        Serial.println("mqtt NOT connected");
+        long now = millis();
+        if (now - lastReconnectAttempt > 10000) 
+        {
+          lastReconnectAttempt = now;
+          // Attempt to reconnect
+          if (mqttClient->connect(config.DeviceName.c_str(),"RIP",0,false,config.DeviceName.c_str())) 
+          {
+            String recon = "Recon";
+            mqttSend(recon,config.DeviceName,": Reconnected");
+            lastReconnectAttempt = 0;
+            mqttSubscribe();
+          }
+        }
+      } else {
+        // Client connected
+        mqttClient->loop();
+      }
+    
+      if(cHeartbeat >= config.HeartbeatEvery and config.HeartbeatEvery > 0)
+      {
+        cHeartbeat = 0;
+        mqttSend(config.HeartbeatTopic,config.DeviceName," Still Here");
+      }
+    }
+  }
+  yield();
+
+}
 #endif
